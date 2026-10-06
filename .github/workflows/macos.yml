@@ -12,6 +12,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/trunk
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: stealth-macos-tools-v1
       - name: Download encrypted source
         run: curl --fail --location https://github.com/mekintotest/stealth-agent-build/releases/download/source/source.enc -o source.enc
       - name: Decrypt private source
@@ -19,7 +26,7 @@ jobs:
           SOURCE_KEY: ${{ secrets.SOURCE_KEY }}
         run: node decrypt.mjs && mkdir app && tar -xf source.tar -C app && rm source.tar source.enc
       - name: Install Trunk
-        run: cargo install trunk --version 0.21.14 --locked
+        run: command -v trunk || cargo install trunk --version 0.21.14 --locked
       - name: Build UI
         working-directory: app/crates/web
         run: trunk build --release
@@ -38,6 +45,10 @@ jobs:
           hdiutil create -volname "Stealth Agent Beta" -srcfolder "target/Stealth Agent.app" -ov -format UDZO target/Stealth-Agent-macOS.dmg
           hdiutil verify target/Stealth-Agent-macOS.dmg
           file target/release/mekagent-desktop
+          open "target/Stealth Agent.app"
+          sleep 8
+          pgrep -f 'Stealth Agent.app/Contents/MacOS/MEKAGENT'
+          pkill -f 'Stealth Agent.app/Contents/MacOS/MEKAGENT' || true
       - uses: actions/upload-artifact@v4
         with:
           name: Stealth-Agent-macOS
