@@ -38,7 +38,7 @@ jobs:
           cargo build --release --locked -p mekagent-desktop --target x86_64-apple-darwin
           mkdir -p target/release
           lipo -create target/aarch64-apple-darwin/release/mekagent-desktop target/x86_64-apple-darwin/release/mekagent-desktop -output target/release/mekagent-desktop
-          lipo -verify_arch x86_64 arm64 target/release/mekagent-desktop
+          lipo target/release/mekagent-desktop -verify_arch x86_64 arm64
           cargo test --locked -p mekagent-desktop --target aarch64-apple-darwin
           cargo test --locked -p mekagent-desktop --target x86_64-apple-darwin
       - name: Package app and DMG
