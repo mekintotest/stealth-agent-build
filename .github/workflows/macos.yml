@@ -1,0 +1,45 @@
+name: macOS desktop build
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Download encrypted source
+        run: curl --fail --location https://github.com/mekintotest/stealth-agent-build/releases/download/source/source.enc -o source.enc
+      - name: Decrypt private source
+        env:
+          SOURCE_KEY: ${{ secrets.SOURCE_KEY }}
+        run: node decrypt.mjs && mkdir app && tar -xf source.tar -C app && rm source.tar source.enc
+      - name: Install Trunk
+        run: cargo install trunk --version 0.21.14 --locked
+      - name: Build UI
+        working-directory: app/crates/web
+        run: trunk build --release
+      - name: Build desktop
+        working-directory: app
+        run: cargo build --release --locked -p mekagent-desktop
+      - name: Package app and DMG
+        working-directory: app
+        run: |
+          mkdir -p "target/Stealth Agent.app/Contents/MacOS" "target/Stealth Agent.app/Contents/Resources"
+          cp target/release/mekagent-desktop "target/Stealth Agent.app/Contents/MacOS/MEKAGENT"
+          cp deploy/desktop/Info.plist "target/Stealth Agent.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleName Stealth Agent Beta' "target/Stealth Agent.app/Contents/Info.plist"
+          codesign --force --deep --sign - "target/Stealth Agent.app"
+          codesign --verify --deep --strict "target/Stealth Agent.app"
+          hdiutil create -volname "Stealth Agent Beta" -srcfolder "target/Stealth Agent.app" -ov -format UDZO target/Stealth-Agent-macOS.dmg
+          hdiutil verify target/Stealth-Agent-macOS.dmg
+          file target/release/mekagent-desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stealth-Agent-macOS
+          path: app/target/Stealth-Agent-macOS.dmg
+          retention-days: 7
