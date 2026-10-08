@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        keychain: [prompt, allow-all]
+        keychain: [unlocked]
     runs-on: macos-14
     timeout-minutes: 25
     steps:
@@ -33,11 +33,14 @@ jobs:
           echo "NEW_SHA=$(shasum -a 256 "/tmp/newmnt/Stealth Agent.app/Contents/MacOS/MEKAGENT" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           hdiutil detach /tmp/newmnt
           codesign --verify --deep --strict "$APP"
-      - name: Optionally pre-create the keychain items open to every application
-        if: matrix.keychain == 'allow-all'
+      - name: Give the session an unlocked default keychain, like a signed-in user has
         run: |
-          security add-generic-password -U -A -a provider-vault -s dev.mekagent.desktop -w "$(uuidgen)$(uuidgen)"
-          security find-generic-password -s dev.mekagent.desktop -a provider-vault >/dev/null && echo "item present (allow-all)"
+          security create-keychain -p e2e-pass e2e.keychain
+          security default-keychain -s e2e.keychain
+          security unlock-keychain -p e2e-pass e2e.keychain
+          security set-keychain-settings -t 7200 e2e.keychain
+          security list-keychains -d user -s e2e.keychain
+          security list-keychains -d user
       - name: Launch directly (logs captured), stage the update, close like a user
         run: |
           set +e
