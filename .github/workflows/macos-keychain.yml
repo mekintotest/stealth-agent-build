@@ -1,0 +1,112 @@
+name: macOS keychain and update diagnosis
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  answered-prompt:
+    name: real updater, prompt answered by a script
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: Stealth-Agent-macOS, run-id: 37751437219, github-token: "${{ secrets.GITHUB_TOKEN }}", path: old }
+      - name: Install old app and fetch published build
+        run: |
+          mkdir -p "$HOME/Applications" /tmp/oldmnt /tmp/newmnt out
+          hdiutil attach old/Stealth-Agent-macOS.dmg -nobrowse -readonly -mountpoint /tmp/oldmnt
+          cp -R "/tmp/oldmnt/Stealth Agent.app" "$HOME/Applications/"; hdiutil detach /tmp/oldmnt
+          curl -fsSL https://stealth-agent.mekintotest.workers.dev/downloads/macos -o new.dmg
+          hdiutil attach new.dmg -nobrowse -readonly -mountpoint /tmp/newmnt
+          APP="$HOME/Applications/Stealth Agent.app"
+          echo "OLD_SHA=$(shasum -a 256 "$APP/Contents/MacOS/MEKAGENT" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NEW_SHA=$(shasum -a 256 "/tmp/newmnt/Stealth Agent.app/Contents/MacOS/MEKAGENT" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          hdiutil detach /tmp/newmnt
+          security create-keychain -p e2e-pass e2e.keychain
+          security default-keychain -s e2e.keychain
+          security unlock-keychain -p e2e-pass e2e.keychain
+          security set-keychain-settings -t 7200 e2e.keychain
+          security list-keychains -d user -s e2e.keychain
+      - name: Background responder for the keychain prompt (types the keychain password, clicks Always Allow)
+        run: |
+          cat > /tmp/answer.applescript <<'EOF'
+          tell application "System Events"
+            if exists process "SecurityAgent" then
+              tell process "SecurityAgent"
+                set frontmost to true
+                try
+                  set value of text field 1 of window 1 to "e2e-pass"
+                end try
+                try
+                  click button "Always Allow" of window 1
+                on error
+                  try
+                    click button "Always Allow" of group 1 of window 1
+                  end try
+                end try
+              end tell
+            end if
+          end tell
+          EOF
+          nohup bash -c 'while true; do osascript /tmp/answer.applescript >> /tmp/answer.log 2>&1; sleep 1; done' >/dev/null 2>&1 &
+      - name: Launch, stage update, close like a user, watch
+        run: |
+          set +e
+          APP="$HOME/Applications/Stealth Agent.app"; BIN="$APP/Contents/MacOS/MEKAGENT"; CACHE="$HOME/Library/Caches/dev.MEK.MEKAGENT"
+          "$BIN" > out/app.log 2>&1 &
+          for i in $(seq 1 30); do pgrep -f "$BIN" >/dev/null && break; sleep 1; done
+          sleep 25
+          osascript -e 'tell application "System Events" to tell (first process whose name is "MEKAGENT") to click (first button of window 1 whose subrole is "AXCloseButton")' 2>&1 | tee out/close-result.txt
+          : > out/timeline.txt; prev=0
+          for t in 3 6 10 15 20 30 40 50 60 90; do
+            sleep $(( t - prev )); prev=$t
+            echo "t+${t}s installed=$(shasum -a 256 "$BIN" | cut -c1-12) (old=${OLD_SHA:0:12} new=${NEW_SHA:0:12}) procs=$(pgrep -f 'Stealth Agent.app/Contents/MacOS/MEKAGENT' | tr '\n' ' ') marker=$([ -f "$CACHE/update-health.ok" ] && echo yes || echo no) securityagent=$(pgrep -x SecurityAgent | tr '\n' ' ')" | tee -a out/timeline.txt
+            screencapture -x "out/t${t}.png"
+          done
+          CUR=$(shasum -a 256 "$BIN" | cut -d' ' -f1)
+          if [ "$CUR" = "$NEW_SHA" ]; then echo "RESULT: updated to the published build"; elif [ "$CUR" = "$OLD_SHA" ]; then echo "RESULT: still on the old build"; else echo "RESULT: unknown binary"; fi | tee out/result.txt
+          cp /tmp/answer.log out/answer.log 2>/dev/null
+          pkill -f "Stealth Agent.app/Contents/MacOS/MEKAGENT" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: mac-answered-prompt, path: out, retention-days: 3 }
+  stable-requirement:
+    name: does a stable signing requirement keep keychain access across builds
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: Stealth-Agent-macOS, run-id: 37751437219, github-token: "${{ secrets.GITHUB_TOKEN }}", path: old }
+      - name: Experiment
+        run: |
+          set +e
+          mkdir -p out /tmp/oldmnt /tmp/newmnt
+          hdiutil attach old/Stealth-Agent-macOS.dmg -nobrowse -readonly -mountpoint /tmp/oldmnt
+          curl -fsSL https://stealth-agent.mekintotest.workers.dev/downloads/macos -o new.dmg
+          hdiutil attach new.dmg -nobrowse -readonly -mountpoint /tmp/newmnt
+          security create-keychain -p e2e-pass e2e.keychain
+          security default-keychain -s e2e.keychain
+          security unlock-keychain -p e2e-pass e2e.keychain
+          security set-keychain-settings -t 7200 e2e.keychain
+          security list-keychains -d user -s e2e.keychain
+          for variant in base stable; do
+            D="$HOME/V-$variant"; mkdir -p "$D"; cp -R "/tmp/oldmnt/Stealth Agent.app" "$D/"
+            APP="$D/Stealth Agent.app"; BIN="$APP/Contents/MacOS/MEKAGENT"
+            sign() { if [ "$variant" = stable ]; then codesign --force --deep --sign - --identifier dev.stealth.agent -r='designated => identifier "dev.stealth.agent"' "$APP"; else codesign --force --deep --sign - "$APP"; fi; }
+            sign; echo "== $variant: requirement of old build:"; codesign -d -r- "$APP" 2>&1 | grep -E "designated" | tee -a out/$variant.txt
+            STEALTH_DESKTOP_PROFILE=$variant "$BIN" > out/$variant-first.log 2>&1 &
+            sleep 14
+            echo "$variant first launch (item created by old build): securityagent=$(pgrep -x SecurityAgent | tr '\n' ' ')" | tee -a out/$variant.txt
+            pkill -f "$BIN"; sleep 2
+            cp "/tmp/newmnt/Stealth Agent.app/Contents/MacOS/MEKAGENT" "$BIN"
+            sign; echo "$variant: requirement of new build:" | tee -a out/$variant.txt; codesign -d -r- "$APP" 2>&1 | grep -E "designated" | tee -a out/$variant.txt
+            STEALTH_DESKTOP_PROFILE=$variant "$BIN" > out/$variant-second.log 2>&1 &
+            sleep 14
+            if pgrep -x SecurityAgent >/dev/null; then echo "$variant: KEYCHAIN PROMPT APPEARED after swapping in the new build" | tee -a out/$variant.txt; else echo "$variant: no prompt after swapping in the new build" | tee -a out/$variant.txt; fi
+            screencapture -x out/$variant-after-swap.png
+            pkill -f "$BIN"; sleep 2; pkill SecurityAgent; sleep 1
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: mac-stable-requirement, path: out, retention-days: 3 }
