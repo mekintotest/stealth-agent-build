@@ -6,19 +6,22 @@ permissions:
   actions: read
 jobs:
   update:
+    strategy:
+      fail-fast: false
+      matrix:
+        keychain: [prompt, allow-all]
     runs-on: macos-14
     timeout-minutes: 25
     steps:
-      - name: Download previously built app (1.0.14)
+      - name: Download previously built app (old build)
         uses: actions/download-artifact@v4
         with:
           name: Stealth-Agent-macOS
           run-id: 37751437219
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: old
-      - name: Install old app and fetch the published update for comparison
+      - name: Install old app, fetch the published update for comparison
         run: |
-          set -x
           mkdir -p "$HOME/Applications" /tmp/oldmnt /tmp/newmnt out
           hdiutil attach old/Stealth-Agent-macOS.dmg -nobrowse -readonly -mountpoint /tmp/oldmnt
           cp -R "/tmp/oldmnt/Stealth Agent.app" "$HOME/Applications/"
@@ -26,43 +29,39 @@ jobs:
           curl -fsSL https://stealth-agent.mekintotest.workers.dev/downloads/macos -o new.dmg
           hdiutil attach new.dmg -nobrowse -readonly -mountpoint /tmp/newmnt
           APP="$HOME/Applications/Stealth Agent.app"
-          BIN="$APP/Contents/MacOS/MEKAGENT"
-          echo "OLD_SHA=$(shasum -a 256 "$BIN" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "OLD_SHA=$(shasum -a 256 "$APP/Contents/MacOS/MEKAGENT" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           echo "NEW_SHA=$(shasum -a 256 "/tmp/newmnt/Stealth Agent.app/Contents/MacOS/MEKAGENT" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           hdiutil detach /tmp/newmnt
           codesign --verify --deep --strict "$APP"
-          plutil -p "$APP/Contents/Info.plist" | head -20
-      - name: Launch, let the app download and stage the update, then close it
+      - name: Optionally pre-create the keychain items open to every application
+        if: matrix.keychain == 'allow-all'
+        run: |
+          security add-generic-password -U -A -a provider-vault -s dev.mekagent.desktop -w "$(uuidgen)$(uuidgen)"
+          security find-generic-password -s dev.mekagent.desktop -a provider-vault >/dev/null && echo "item present (allow-all)"
+      - name: Launch directly (logs captured), stage the update, close like a user
         run: |
           set +e
-          APP="$HOME/Applications/Stealth Agent.app"
-          BIN="$APP/Contents/MacOS/MEKAGENT"
-          echo "old=$OLD_SHA new=$NEW_SHA"
-          [ "$OLD_SHA" != "$NEW_SHA" ] || echo "WARNING: old and new binaries identical"
-          open -n "$APP"
-          for i in $(seq 1 30); do pgrep -f "Stealth Agent.app/Contents/MacOS/MEKAGENT" >/dev/null && break; sleep 1; done
-          sleep 25
+          APP="$HOME/Applications/Stealth Agent.app"; BIN="$APP/Contents/MacOS/MEKAGENT"
           CACHE="$HOME/Library/Caches/dev.MEK.MEKAGENT"
-          echo "--- cache after first launch"; ls -la "$CACHE" 2>&1 | tee out/cache-before-close.txt
-          screencapture -x out/mac-window-light.png
-          # Try dark appearance (needs Accessibility/Automation; reported either way).
-          osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true' 2>&1 | tee out/dark-mode-result.txt
-          sleep 4; screencapture -x out/mac-window-dark.png
-          # Close the window exactly like a user (red button) so the app runs its shutdown path.
+          "$BIN" > out/app.log 2>&1 &
+          for i in $(seq 1 30); do pgrep -f "$BIN" >/dev/null && break; sleep 1; done
+          sleep 25
+          echo "--- cache before close"; ls -la "$CACHE" | tee out/cache-before-close.txt
           osascript -e 'tell application "System Events" to tell (first process whose name is "MEKAGENT") to click (first button of window 1 whose subrole is "AXCloseButton")' 2>&1 | tee out/close-result.txt
-          sleep 60
-          echo "--- processes after close"; pgrep -fl "Stealth Agent.app/Contents/MacOS/MEKAGENT" | tee out/processes-after.txt
-          echo "--- cache after close"; ls -la "$CACHE" 2>&1 | tee out/cache-after-close.txt
+          : > out/timeline.txt
+          for t in 3 6 10 15 20 30 40 60 90 120; do
+            sleep $(( t - ${prev:-0} )); prev=$t
+            echo "t+${t}s installed=$(shasum -a 256 "$BIN" | cut -c1-12) (old=${OLD_SHA:0:12} new=${NEW_SHA:0:12}) procs=$(pgrep -f 'Stealth Agent.app/Contents/MacOS/MEKAGENT' | tr '\n' ' ') marker=$([ -f "$CACHE/update-health.ok" ] && echo yes || echo no)" | tee -a out/timeline.txt
+            screencapture -x "out/t${t}.png"
+          done
           CUR=$(shasum -a 256 "$BIN" | cut -d' ' -f1)
-          echo "current=$CUR" | tee out/result.txt
-          if [ "$CUR" = "$NEW_SHA" ]; then echo "RESULT: updated to the published build" | tee -a out/result.txt; elif [ "$CUR" = "$OLD_SHA" ]; then echo "RESULT: still on the old build" | tee -a out/result.txt; else echo "RESULT: unknown binary" | tee -a out/result.txt; fi
+          if [ "$CUR" = "$NEW_SHA" ]; then echo "RESULT: updated to the published build"; elif [ "$CUR" = "$OLD_SHA" ]; then echo "RESULT: still on the old build"; else echo "RESULT: unknown binary"; fi | tee out/result.txt
           codesign --verify --deep --strict "$APP" 2>&1 | tee -a out/result.txt
-          ls -la "$HOME/Library/Caches/dev.MEK.MEKAGENT" "$HOME/Library/Application Support" 2>&1 | head -30 > out/dirs.txt
-          screencapture -x out/mac-after.png
+          ls -la "$CACHE" | tee out/cache-after.txt
           pkill -f "Stealth Agent.app/Contents/MacOS/MEKAGENT" || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mac-update-e2e
+          name: mac-update-${{ matrix.keychain }}
           path: out
           retention-days: 3
