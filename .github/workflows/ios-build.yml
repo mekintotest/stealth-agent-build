@@ -62,6 +62,11 @@ jobs:
           xcrun simctl io "$UDID" screenshot "$GITHUB_WORKSPACE/out/ios-launch.png"
           xcrun simctl ui "$UDID" appearance light; sleep 6
           xcrun simctl io "$UDID" screenshot "$GITHUB_WORKSPACE/out/ios-light.png"
+          xcrun simctl ui "$UDID" appearance dark; sleep 8
+          xcrun simctl io "$UDID" screenshot "$GITHUB_WORKSPACE/out/ios-dark.png"
+          xcrun simctl ui "$UDID" content_size accessibility-extra-large; sleep 6
+          xcrun simctl io "$UDID" screenshot "$GITHUB_WORKSPACE/out/ios-large-text.png"
+          xcrun simctl ui "$UDID" content_size large
           xcrun simctl spawn "$UDID" launchctl list | grep -i stealth | tee "$GITHUB_WORKSPACE/out/ios-process.txt"
           xcrun simctl listapps "$UDID" | grep -A4 -i stealth | head -12 | tee "$GITHUB_WORKSPACE/out/ios-apps.txt"
           xcrun simctl spawn "$UDID" log show --last 2m --predicate 'process == "Stealth Agent"' --style compact 2>/dev/null | tail -30 > "$GITHUB_WORKSPACE/out/ios-log.txt"
