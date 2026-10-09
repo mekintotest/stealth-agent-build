@@ -1,0 +1,75 @@
+name: iOS web view check
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+      - name: Select the newest installed Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+      - name: Download and decrypt the private source
+        env:
+          SOURCE_KEY: ${{ secrets.SOURCE_KEY }}
+        run: |
+          curl --fail --location https://github.com/mekintotest/stealth-agent-build/releases/download/source/source.enc -o source.enc
+          node decrypt.mjs && mkdir app && tar -xf source.tar -C app && rm source.tar source.enc
+      - name: Tauri command line tool and CocoaPods
+        run: |
+          curl -fsSL -o tauri.zip https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.1/cargo-tauri-aarch64-apple-darwin.zip
+          unzip -q tauri.zip -d "$HOME/.cargo/bin" && chmod +x "$HOME/.cargo/bin/cargo-tauri"
+          brew list cocoapods >/dev/null 2>&1 || brew install cocoapods
+      - name: Replace the launcher with a diagnostic page (this workflow only; the repository is untouched)
+        working-directory: app/mobile
+        run: |
+          cat > app/index.html <<'EOF'
+          <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+          <style>body{font:15px/1.5 ui-monospace,Menlo,monospace;margin:0;padding:64px 16px;background:#fff;color:#111}
+          h1{font:700 18px system-ui;margin:0 0 12px}p{margin:6px 0;word-break:break-all}b{color:#06c}.ok{color:#080}.no{color:#b00}</style></head><body>
+          <h1>Real iOS web view</h1><div id="out"></div>
+          <script>
+          const ua = navigator.userAgent, out = document.getElementById('out');
+          const line = (k, v, good) => { const p = document.createElement('p'); p.innerHTML = '<b>' + k + '</b> ' + '<span class="' + (good === undefined ? '' : good ? 'ok' : 'no') + '">' + v + '</span>'; out.append(p); };
+          const apple = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints >= 2);
+          const hasSafari = /Safari\//.test(ua);
+          line('userAgent', ua);
+          line('contains "Safari/"', String(hasSafari), !hasSafari);
+          line('looks like iPhone/iPad', String(apple), apple);
+          line('ios-app.js would activate', String(apple && !hasSafari), apple && !hasSafari);
+          line('origin', location.origin);
+          line('isSecureContext', String(window.isSecureContext));
+          line('typeof navigator.share', typeof navigator.share);
+          line('typeof navigator.canShare', typeof navigator.canShare);
+          try { line('canShare({files:[File]})', String(navigator.canShare && navigator.canShare({ files: [new File(['x'], 'a.txt', { type: 'text/plain' })] }))); } catch (e) { line('canShare threw', e.name); }
+          line('maxTouchPoints', String(navigator.maxTouchPoints));
+          </script></body></html>
+          EOF
+      - name: Generate the Xcode project and build for the simulator
+        working-directory: app/mobile/src-tauri
+        run: |
+          cargo tauri ios init --ci 2>&1 | tail -3
+          cargo tauri ios build --ci --debug --target aarch64-sim 2>&1 | tail -4
+      - name: Run it and take a screenshot
+        working-directory: app/mobile/src-tauri
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          APP="$PWD/gen/apple/build/arm64-sim/Stealth Agent.app"
+          UDID=$(xcrun simctl list devices available | grep -E "iPhone (15|16|17)" | head -1 | grep -oE '[0-9A-F-]{36}')
+          xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b >/dev/null
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" dev.stealthagent.app
+          sleep 12
+          xcrun simctl io "$UDID" screenshot "$GITHUB_WORKSPACE/out/ios-webview-check.png"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stealth-ios-check
+          path: out
+          retention-days: 7
