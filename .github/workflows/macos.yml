@@ -47,7 +47,10 @@ jobs:
           mkdir -p "target/Stealth Agent.app/Contents/MacOS" "target/Stealth Agent.app/Contents/Resources"
           cp target/release/mekagent-desktop "target/Stealth Agent.app/Contents/MacOS/MEKAGENT"
           cp deploy/desktop/Info.plist "target/Stealth Agent.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Set :CFBundleName Stealth Agent Beta' "target/Stealth Agent.app/Contents/Info.plist"
+          cp deploy/desktop/AppIcon.icns "target/Stealth Agent.app/Contents/Resources/AppIcon.icns"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "target/Stealth Agent.app/Contents/Info.plist"
+          test -s "target/Stealth Agent.app/Contents/Resources/AppIcon.icns" && echo "icon in bundle: $(stat -f %z "target/Stealth Agent.app/Contents/Resources/AppIcon.icns") bytes"
+          sips -g pixelWidth -g format "target/Stealth Agent.app/Contents/Resources/AppIcon.icns" || true
           codesign --force --deep --sign - "target/Stealth Agent.app"
           codesign --verify --deep --strict "target/Stealth Agent.app"
           hdiutil create -volname "Stealth Agent Beta" -srcfolder "target/Stealth Agent.app" -ov -format UDZO target/Stealth-Agent-macOS.dmg
