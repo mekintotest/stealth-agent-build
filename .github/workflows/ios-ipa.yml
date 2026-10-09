@@ -65,7 +65,17 @@ jobs:
           echo "--- Info.plist"; unzip -p out/Stealth-Agent-iOS.ipa 'Payload/*/Info.plist' > /tmp/info.plist; plutil -convert xml1 -o - /tmp/info.plist | grep -E -A1 'CFBundle(Identifier|ShortVersionString|Version|Name|DisplayName|IconName)|MinimumOSVersion|UIDeviceFamily' | head -40
           echo "--- is it signed? (it must NOT be: AltStore signs it on the phone)"; codesign -dv "$APP" 2>&1 | head -3 || true
           echo "--- sha256"; shasum -a 256 out/Stealth-Agent-iOS.ipa
-          echo "--- icon actually compiled in"; xcrun --sdk iphoneos assetutil --info "$APP/Assets.car" 2>/dev/null | grep -E '"Name"|"PixelWidth"' | head -8 || true
+          echo "--- icon renditions inside the compiled catalogue (Opaque must be true; every size present)"
+          xcrun --sdk iphoneos assetutil --info "$APP/Assets.car" 2>/dev/null | grep -E '"Name" : "AppIcon"|"Idiom"|"PixelWidth"|"Opaque"|"Scale"' | paste -sd' ' - | sed 's/"Name" : "AppIcon"/\n&/g' | sed 's/  */ /g' | head -40 || true
+          echo "--- loose icon files, converted back to ordinary PNGs with Apple's own tool so they can be looked at"
+          mkdir -p out/icons
+          CRUSH=$(find /Applications -name pngcrush -path '*iPhoneOS.platform*' 2>/dev/null | head -1)
+          echo "pngcrush: $CRUSH"
+          for f in "$APP"/AppIcon*.png; do
+            n=$(basename "$f" | tr '@~' '__')
+            if [ -n "$CRUSH" ]; then "$CRUSH" -revert-iphone-optimizations "$f" "out/icons/$n" >/dev/null 2>&1 || cp "$f" "out/icons/$n"; else cp "$f" "out/icons/$n"; fi
+          done
+          ls -la out/icons
       - uses: actions/upload-artifact@v4
         if: always()
         with:
