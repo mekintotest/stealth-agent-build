@@ -1,0 +1,72 @@
+name: iOS unsigned IPA
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+      - name: Select the newest installed Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)" && xcodebuild -version
+      - name: Download and decrypt the private source
+        env:
+          SOURCE_KEY: ${{ secrets.SOURCE_KEY }}
+        run: |
+          curl --fail --location https://github.com/mekintotest/stealth-agent-build/releases/download/source/source.enc -o source.enc
+          node decrypt.mjs && mkdir app && tar -xf source.tar -C app && rm source.tar source.enc
+      - name: Tauri command line tool and CocoaPods
+        run: |
+          curl -fsSL -o tauri.zip https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.1/cargo-tauri-aarch64-apple-darwin.zip
+          unzip -q tauri.zip -d "$HOME/.cargo/bin" && chmod +x "$HOME/.cargo/bin/cargo-tauri"
+          brew list cocoapods >/dev/null 2>&1 || brew install cocoapods
+      - name: Generate the Xcode project
+        working-directory: app/mobile/src-tauri
+        run: cargo tauri ios init --ci 2>&1 | tail -3
+      - name: Put the real app icon set into the project
+        working-directory: app/mobile/src-tauri
+        run: |
+          SET=$(find gen/apple -name 'AppIcon.appiconset' -type d | head -1)
+          echo "icon set: $SET"
+          ls "$SET" | head -30
+          cp icons/ios/*.png "$SET"/ 2>/dev/null || true
+          ls "$SET" | wc -l | sed 's/^/files in the icon set: /'
+      - name: Build the device app WITHOUT code signing
+        working-directory: app/mobile/src-tauri
+        run: |
+          set -o pipefail
+          # Build the Rust library for a real device first (this is what the Xcode project links against).
+          cargo tauri ios build --ci --target aarch64 2>&1 | tail -5 || true
+          PROJECT=$(ls -d gen/apple/*.xcodeproj | head -1)
+          SCHEME=$(basename "$PROJECT" .xcodeproj)_iOS
+          echo "project: $PROJECT scheme: $SCHEME"
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
+            build 2>&1 | tail -25
+          find "$RUNNER_TEMP/dd" -name '*.app' -path '*iphoneos*' -maxdepth 6 | head -3
+      - name: Wrap it as an IPA and inspect it
+        run: |
+          set -e
+          APP=$(find "$RUNNER_TEMP/dd" -name '*.app' -path '*iphoneos*' -maxdepth 6 | head -1)
+          [ -d "$APP" ] || { echo "NO .app was produced"; exit 1; }
+          mkdir -p out/Payload && cp -R "$APP" out/Payload/
+          (cd out && zip -qry Stealth-Agent-iOS.ipa Payload && rm -rf Payload)
+          ls -la out
+          echo "--- inside the IPA"; unzip -l out/Stealth-Agent-iOS.ipa | awk '{print $4}' | grep -E '^Payload/[^/]+/(Info.plist|AppIcon|Assets.car|embedded.mobileprovision|_CodeSignature)' | head
+          echo "--- Info.plist"; unzip -p out/Stealth-Agent-iOS.ipa 'Payload/*/Info.plist' > /tmp/info.plist; plutil -convert xml1 -o - /tmp/info.plist | grep -E -A1 'CFBundle(Identifier|ShortVersionString|Version|Name|DisplayName|IconName)|MinimumOSVersion|UIDeviceFamily' | head -40
+          echo "--- is it signed? (it must NOT be: AltStore signs it on the phone)"; codesign -dv "$APP" 2>&1 | head -3 || true
+          echo "--- sha256"; shasum -a 256 out/Stealth-Agent-iOS.ipa
+          echo "--- icon actually compiled in"; xcrun --sdk iphoneos assetutil --info "$APP/Assets.car" 2>/dev/null | grep -E '"Name"|"PixelWidth"' | head -8 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stealth-ios-ipa
+          path: out
+          retention-days: 14
