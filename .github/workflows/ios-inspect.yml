@@ -1,0 +1,34 @@
+name: iOS project inspect
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - name: Download and decrypt the private source
+        env:
+          SOURCE_KEY: ${{ secrets.SOURCE_KEY }}
+        run: |
+          curl --fail --location https://github.com/mekintotest/stealth-agent-build/releases/download/source/source.enc -o source.enc
+          node decrypt.mjs && mkdir app && tar -xf source.tar -C app && rm source.tar source.enc
+      - name: Tauri CLI
+        run: |
+          curl -fsSL -o tauri.zip https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.1/cargo-tauri-aarch64-apple-darwin.zip
+          unzip -q tauri.zip -d "$HOME/.cargo/bin" && chmod +x "$HOME/.cargo/bin/cargo-tauri"
+          brew list cocoapods >/dev/null 2>&1 || brew install cocoapods
+      - name: Generate the project and show every place signing is decided
+        working-directory: app/mobile/src-tauri
+        run: |
+          cargo tauri ios init --ci 2>&1 | tail -2
+          echo "=== project.yml (xcodegen source) ==="; cat gen/apple/project.yml 2>/dev/null | head -80
+          echo "=== signing keys in the generated pbxproj ==="; grep -n -E "DEVELOPMENT_TEAM|CODE_SIGN|PROVISIONING|ProvisioningStyle|ENABLE_BITCODE" gen/apple/*.xcodeproj/project.pbxproj | head -30
+          echo "=== tauri.conf ios section options ==="; grep -n -i "developmentTeam\|ios" tauri.conf.json
+          echo "=== env / files tauri reads for the team ==="; env | grep -i -E "APPLE|TAURI|TEAM" | sed 's/=.*/=<set>/' | head
+          ls -la gen/apple | head -30
