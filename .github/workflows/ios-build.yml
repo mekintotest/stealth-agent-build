@@ -1,0 +1,79 @@
+name: iOS build and simulator run
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+      - name: Select the newest installed Xcode
+        run: |
+          ls -d /Applications/Xcode*.app | sort -V | tail -3
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcodebuild -version
+          xcrun simctl list runtimes | tail -6
+      - name: Download encrypted private source
+        run: curl --fail --location https://github.com/mekintotest/stealth-agent-build/releases/download/source/source.enc -o source.enc
+      - name: Decrypt private source
+        env:
+          SOURCE_KEY: ${{ secrets.SOURCE_KEY }}
+        run: node decrypt.mjs && mkdir app && tar -xf source.tar -C app && rm source.tar source.enc
+      - name: Tauri command line tool
+        run: |
+          curl -fsSL -o tauri.zip https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.1/cargo-tauri-aarch64-apple-darwin.zip
+          unzip -q tauri.zip -d "$HOME/.cargo/bin" && chmod +x "$HOME/.cargo/bin/cargo-tauri" && cargo tauri --version
+      - name: CocoaPods
+        run: brew list cocoapods >/dev/null 2>&1 || brew install cocoapods; pod --version
+      - name: Generate the Xcode project
+        working-directory: app/mobile/src-tauri
+        run: cargo tauri ios init --ci 2>&1 | tail -15
+      - name: Build for the simulator
+        working-directory: app/mobile/src-tauri
+        run: |
+          set -o pipefail
+          cargo tauri ios build --ci --debug --target aarch64-sim 2>&1 | tail -30 || true
+          find gen/apple -name '*.app' -maxdepth 8 | head
+      - name: Build an unsigned device archive (IPA payload)
+        working-directory: app/mobile/src-tauri
+        run: |
+          set +e
+          cargo tauri ios build --ci --export-method debugging 2>&1 | tail -30
+          find gen/apple -name '*.ipa' -o -name '*.xcarchive' | head
+      - name: Run in the simulator
+        working-directory: app/mobile/src-tauri
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          APP=$(find gen/apple ~/Library/Developer/Xcode/DerivedData -name 'Stealth*.app' -maxdepth 9 -path '*iphonesimulator*' 2>/dev/null | head -1)
+          echo "simulator app: $APP"
+          UDID=$(xcrun simctl list devices available | grep -E "iPhone (15|16|17)" | head -1 | grep -oE '[0-9A-F-]{36}')
+          echo "device: $UDID"
+          xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b >/dev/null
+          xcrun simctl install "$UDID" "$APP"
+          BUNDLE=dev.stealthagent.app
+          xcrun simctl launch "$UDID" $BUNDLE
+          sleep 25
+          xcrun simctl io "$UDID" screenshot "$GITHUB_WORKSPACE/out/ios-launch.png"
+          xcrun simctl ui "$UDID" appearance light; sleep 6
+          xcrun simctl io "$UDID" screenshot "$GITHUB_WORKSPACE/out/ios-light.png"
+          xcrun simctl spawn "$UDID" launchctl list | grep -i stealth | tee "$GITHUB_WORKSPACE/out/ios-process.txt"
+          xcrun simctl listapps "$UDID" | grep -A4 -i stealth | head -12 | tee "$GITHUB_WORKSPACE/out/ios-apps.txt"
+          xcrun simctl spawn "$UDID" log show --last 2m --predicate 'process == "Stealth Agent"' --style compact 2>/dev/null | tail -30 > "$GITHUB_WORKSPACE/out/ios-log.txt"
+      - name: Collect the IPA if one was produced
+        if: always()
+        run: |
+          mkdir -p out
+          find app/mobile/src-tauri/gen/apple -name '*.ipa' -exec cp {} out/ \; 2>/dev/null
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stealth-ios
+          path: out
+          retention-days: 7
