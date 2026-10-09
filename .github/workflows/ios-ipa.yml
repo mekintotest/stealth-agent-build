@@ -39,22 +39,32 @@ jobs:
       - name: Build the device app WITHOUT code signing
         working-directory: app/mobile/src-tauri
         run: |
-          set -o pipefail
-          # Build the Rust library for a real device first (this is what the Xcode project links against).
-          cargo tauri ios build --ci --target aarch64 2>&1 | tail -5 || true
+          set +e
+          # `tauri ios build` runs the Rust build itself and hands Xcode the settings it needs, so Xcode must be
+          # started by it, not directly. Signing is switched off through the environment Xcode inherits, and the
+          # same settings are written into the project so a retry cannot fall back to "requires a development team".
+          export CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" EXPANDED_CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
           PROJECT=$(ls -d gen/apple/*.xcodeproj | head -1)
-          SCHEME=$(basename "$PROJECT" .xcodeproj)_iOS
-          echo "project: $PROJECT scheme: $SCHEME"
-          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration release \
-            -sdk iphoneos -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/dd" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
-            build 2>&1 | tail -25
-          find "$RUNNER_TEMP/dd" -name '*.app' -path '*iphoneos*' -maxdepth 6 | head -3
-      - name: Wrap it as an IPA and inspect it
+          # Xcode reads these overrides from an .xcconfig that the generated project does not use by default; add one.
+          cat > gen/apple/unsigned.xcconfig <<'XC'
+          CODE_SIGNING_ALLOWED = NO
+          CODE_SIGNING_REQUIRED = NO
+          CODE_SIGN_IDENTITY =
+          EXPANDED_CODE_SIGN_IDENTITY =
+          DEVELOPMENT_TEAM =
+          PROVISIONING_PROFILE_SPECIFIER =
+          XC
+          export XCODE_XCCONFIG_FILE="$PWD/gen/apple/unsigned.xcconfig"
+          echo "xcconfig: $XCODE_XCCONFIG_FILE"
+          cargo tauri ios build --ci --target aarch64 2>&1 | tail -40
+          echo "tauri exit: $?"
+          find gen/apple -name '*.app' -path '*iphoneos*' -maxdepth 8 | head -3
+          find gen/apple "$HOME/Library/Developer/Xcode/DerivedData" -name '*.app' -path '*Release-iphoneos*' -maxdepth 9 2>/dev/null | head -3
+          find gen/apple -name '*.xcarchive' -maxdepth 4 | head -3
+          exit 0      - name: Wrap it as an IPA and inspect it
         run: |
           set -e
-          APP=$(find "$RUNNER_TEMP/dd" -name '*.app' -path '*iphoneos*' -maxdepth 6 | head -1)
+          APP=$(find "$GITHUB_WORKSPACE/app/mobile/src-tauri/gen/apple" "$HOME/Library/Developer/Xcode/DerivedData" "$RUNNER_TEMP" -name '*.app' \( -path '*Release-iphoneos*' -o -path '*archive*' -o -path '*/Products/Applications/*' \) -not -path '*simulator*' 2>/dev/null | head -1)
           [ -d "$APP" ] || { echo "NO .app was produced"; exit 1; }
           mkdir -p out/Payload && cp -R "$APP" out/Payload/
           (cd out && zip -qry Stealth-Agent-iOS.ipa Payload && rm -rf Payload)
