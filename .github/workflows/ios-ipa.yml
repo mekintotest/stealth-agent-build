@@ -61,7 +61,8 @@ jobs:
           find gen/apple -name '*.app' -path '*iphoneos*' -maxdepth 8 | head -3
           find gen/apple "$HOME/Library/Developer/Xcode/DerivedData" -name '*.app' -path '*Release-iphoneos*' -maxdepth 9 2>/dev/null | head -3
           find gen/apple -name '*.xcarchive' -maxdepth 4 | head -3
-          exit 0      - name: Wrap it as an IPA and inspect it
+          exit 0
+      - name: Wrap it as an IPA and inspect it
         run: |
           set -e
           APP=$(find "$GITHUB_WORKSPACE/app/mobile/src-tauri/gen/apple" "$HOME/Library/Developer/Xcode/DerivedData" "$RUNNER_TEMP" -name '*.app' \( -path '*Release-iphoneos*' -o -path '*archive*' -o -path '*/Products/Applications/*' \) -not -path '*simulator*' 2>/dev/null | head -1)
