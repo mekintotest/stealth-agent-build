@@ -50,14 +50,14 @@ jobs:
         run: |
           set +e
           mkdir -p "$GITHUB_WORKSPACE/out"
-          APP=$(find gen/apple ~/Library/Developer/Xcode/DerivedData -name 'Stealth*.app' -maxdepth 9 -path '*iphonesimulator*' 2>/dev/null | head -1)
+          APP="$PWD/gen/apple/build/arm64-sim/Stealth Agent.app"
           echo "simulator app: $APP"
           UDID=$(xcrun simctl list devices available | grep -E "iPhone (15|16|17)" | head -1 | grep -oE '[0-9A-F-]{36}')
           echo "device: $UDID"
           xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b >/dev/null
-          xcrun simctl install "$UDID" "$APP"
+          test -d "$APP" && echo "app bundle present" || echo "app bundle MISSING"; xcrun simctl install "$UDID" "$APP"
           BUNDLE=dev.stealthagent.app
-          xcrun simctl launch "$UDID" $BUNDLE
+          xcrun simctl launch "$UDID" $BUNDLE | tee "$GITHUB_WORKSPACE/out/ios-launch.txt"
           sleep 25
           xcrun simctl io "$UDID" screenshot "$GITHUB_WORKSPACE/out/ios-launch.png"
           xcrun simctl ui "$UDID" appearance light; sleep 6
