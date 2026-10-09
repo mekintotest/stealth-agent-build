@@ -40,26 +40,17 @@ jobs:
         working-directory: app/mobile/src-tauri
         run: |
           set +e
-          # `tauri ios build` runs the Rust build itself and hands Xcode the settings it needs, so Xcode must be
-          # started by it, not directly. Signing is switched off through the environment Xcode inherits, and the
-          # same settings are written into the project so a retry cannot fall back to "requires a development team".
-          export CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" EXPANDED_CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
-          PROJECT=$(ls -d gen/apple/*.xcodeproj | head -1)
-          # Xcode reads these overrides from an .xcconfig that the generated project does not use by default; add one.
-          cat > gen/apple/unsigned.xcconfig <<'XC'
-          CODE_SIGNING_ALLOWED = NO
-          CODE_SIGNING_REQUIRED = NO
-          CODE_SIGN_IDENTITY =
-          EXPANDED_CODE_SIGN_IDENTITY =
-          DEVELOPMENT_TEAM =
-          PROVISIONING_PROFILE_SPECIFIER =
-          XC
-          export XCODE_XCCONFIG_FILE="$PWD/gen/apple/unsigned.xcconfig"
-          echo "xcconfig: $XCODE_XCCONFIG_FILE"
+          PBX=$(ls gen/apple/*.xcodeproj/project.pbxproj | head -1)
+          echo "project file: $PBX"
+          # The generated project pins CODE_SIGN_IDENTITY = "iPhone Developer", and a setting written into the
+          # project outranks anything passed on the command line. Rewrite it in the project itself.
+          grep -c 'CODE_SIGN_IDENTITY = "iPhone Developer"' "$PBX" | sed 's/^/identity lines before: /'
+          sed -i '' 's/CODE_SIGN_IDENTITY = "iPhone Developer";/CODE_SIGN_IDENTITY = "";\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;/' "$PBX"
+          grep -c 'CODE_SIGNING_ALLOWED = NO' "$PBX" | sed 's/^/unsigned lines after: /'
+          # `tauri ios build` starts Xcode with the settings it needs; keep it as the entry point.
           cargo tauri ios build --ci --target aarch64 2>&1 | tail -40
-          echo "tauri exit: $?"
-          find gen/apple -name '*.app' -path '*iphoneos*' -maxdepth 8 | head -3
-          find gen/apple "$HOME/Library/Developer/Xcode/DerivedData" -name '*.app' -path '*Release-iphoneos*' -maxdepth 9 2>/dev/null | head -3
+          echo "tauri exit: ${PIPESTATUS[0]}"
+          find gen/apple "$HOME/Library/Developer/Xcode/DerivedData" -name '*.app' \( -path '*Release-iphoneos*' -o -path '*Products/Applications*' -o -path '*xcarchive*' \) -maxdepth 10 2>/dev/null | head -5
           find gen/apple -name '*.xcarchive' -maxdepth 4 | head -3
           exit 0
       - name: Wrap it as an IPA and inspect it
