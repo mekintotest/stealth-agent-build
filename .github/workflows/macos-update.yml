@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Download previously built app (old build)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: Stealth-Agent-macOS
           run-id: 37751437219
@@ -62,7 +62,7 @@ jobs:
           codesign --verify --deep --strict "$APP" 2>&1 | tee -a out/result.txt
           ls -la "$CACHE" | tee out/cache-after.txt
           pkill -f "Stealth Agent.app/Contents/MacOS/MEKAGENT" || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: mac-update-${{ matrix.keychain }}

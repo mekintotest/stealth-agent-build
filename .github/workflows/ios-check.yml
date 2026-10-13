@@ -8,8 +8,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6ccf6ad39752c86b0ba41e933671f12e287f0e95 # 1.96.1
         with:
           targets: aarch64-apple-ios-sim
       - name: Select the newest installed Xcode
@@ -65,7 +65,7 @@ jobs:
           xcrun simctl launch "$UDID" dev.stealthagent.app
           sleep 12
           xcrun simctl io "$UDID" screenshot "$GITHUB_WORKSPACE/out/ios-webview-check.png"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: stealth-ios-check

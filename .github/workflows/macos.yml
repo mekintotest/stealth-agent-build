@@ -8,11 +8,11 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6ccf6ad39752c86b0ba41e933671f12e287f0e95 # 1.96.1
         with:
           targets: wasm32-unknown-unknown
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/bin/trunk
@@ -60,7 +60,7 @@ jobs:
           sleep 8
           pgrep -f 'Stealth Agent.app/Contents/MacOS/MEKAGENT'
           pkill -f 'Stealth Agent.app/Contents/MacOS/MEKAGENT' || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Stealth-Agent-macOS
           path: app/target/Stealth-Agent-macOS.dmg

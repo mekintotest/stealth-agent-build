@@ -10,7 +10,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 25
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: Stealth-Agent-macOS, run-id: 37751437219, github-token: "${{ secrets.GITHUB_TOKEN }}", path: old }
       - name: Install old app and fetch published build
         run: |
@@ -68,7 +68,7 @@ jobs:
           if [ "$CUR" = "$NEW_SHA" ]; then echo "RESULT: updated to the published build"; elif [ "$CUR" = "$OLD_SHA" ]; then echo "RESULT: still on the old build"; else echo "RESULT: unknown binary"; fi | tee out/result.txt
           cp /tmp/answer.log out/answer.log 2>/dev/null
           pkill -f "Stealth Agent.app/Contents/MacOS/MEKAGENT" || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with: { name: mac-answered-prompt, path: out, retention-days: 3 }
   stable-requirement:
@@ -76,7 +76,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 20
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: Stealth-Agent-macOS, run-id: 37751437219, github-token: "${{ secrets.GITHUB_TOKEN }}", path: old }
       - name: Experiment
         run: |
@@ -107,6 +107,6 @@ jobs:
             screencapture -x out/$variant-after-swap.png
             pkill -f "$BIN"; sleep 2; pkill SecurityAgent; sleep 1
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with: { name: mac-stable-requirement, path: out, retention-days: 3 }
